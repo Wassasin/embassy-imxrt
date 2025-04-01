@@ -48,6 +48,7 @@ pub mod wwdt;
 #[cfg_attr(feature = "mimxrt633s", path = "chips/mimxrt633s.rs")]
 #[cfg_attr(feature = "mimxrt685s", path = "chips/mimxrt685s.rs")]
 mod chip;
+mod util;
 
 // Reexports
 pub use adc::AdcChannel;

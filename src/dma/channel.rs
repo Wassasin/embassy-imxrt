@@ -6,7 +6,7 @@ use core::task::Poll;
 
 use embassy_sync::waitqueue::AtomicWaker;
 
-use super::{DESCRIPTORS, DMA_WAKERS};
+use super::{DESCRIPTORS, DMA_CHANNELS};
 use crate::dma::transfer::{Direction, Transfer, TransferOptions};
 use crate::dma::DmaInfo;
 
@@ -48,7 +48,7 @@ impl<'d> Channel<'d> {
 
     /// Return a reference to the channel's waker
     pub fn get_waker(&self) -> &'d AtomicWaker {
-        &DMA_WAKERS[self.info.ch_num]
+        &DMA_CHANNELS[self.info.ch_num].waker
     }
 
     /// Check whether DMA is active
@@ -91,7 +91,7 @@ impl<'d> Channel<'d> {
                 return Poll::Ready(());
             }
 
-            DMA_WAKERS[channel].register(cx.waker());
+            self.get_waker().register(cx.waker());
 
             // Has the transfer completed now?
             if self.info.regs.active0().read().act().bits() & (1 << channel) == 0 {

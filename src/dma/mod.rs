@@ -4,7 +4,7 @@ pub mod channel;
 pub mod transfer;
 
 use core::marker::PhantomData;
-use core::ptr;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use embassy_hal_internal::impl_peripheral;
 use embassy_hal_internal::interrupt::InterruptExt;
@@ -58,18 +58,47 @@ pub enum Error {
     UnsupportedConfiguration,
 }
 
+struct ChannelState {
+    /// Waker associated to this channel when using async/await.
+    waker: AtomicWaker,
+    /// Callback that can be used for tightly coupled ISR handling.
+    ///
+    /// Leave null when not in use.
+    callback: AtomicPtr<fn()>,
+}
+
+impl ChannelState {
+    pub const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+            callback: AtomicPtr::new(core::ptr::null_mut()),
+        }
+    }
+
+    pub fn wake(&self) {
+        self.waker.wake();
+
+        let ptr = self.callback.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            unsafe {
+                (*ptr)();
+            }
+        }
+    }
+}
+
 // One waker per channel
-static DMA_WAKERS: [AtomicWaker; DMA_CHANNEL_COUNT] = [const { AtomicWaker::new() }; DMA_CHANNEL_COUNT];
+static DMA_CHANNELS: [ChannelState; DMA_CHANNEL_COUNT] = [const { ChannelState::new() }; DMA_CHANNEL_COUNT];
 
 #[cfg(feature = "rt")]
 #[interrupt]
 #[allow(non_snake_case)]
 fn DMA0() {
-    dma0_irq_handler(&DMA_WAKERS);
+    dma0_irq_handler();
 }
 
 #[cfg(feature = "rt")]
-fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
+fn dma0_irq_handler() {
     // SAFETY: unsafe needed to take pointer to Dma0 during interrupt handling
     let reg = unsafe { crate::pac::Dma0::steal() };
 
@@ -83,7 +112,7 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                 // Clear the pending interrupt for this channel
                 // SAFETY: unsafe due to .bits usage
                 reg.errint0().write(|w| unsafe { w.err().bits(1 << channel) });
-                wakers[channel as usize].wake();
+                DMA_CHANNELS[channel as usize].wake();
             }
         }
     }
@@ -97,7 +126,7 @@ fn dma0_irq_handler<const N: usize>(wakers: &[AtomicWaker; N]) {
                 // Clear the pending interrupt for this channel
                 // SAFETY: unsafe due to .bits usage
                 reg.inta0().write(|w| unsafe { w.ia().bits(1 << channel) });
-                wakers[channel as usize].wake();
+                DMA_CHANNELS[channel as usize].wake();
             }
         }
     }
@@ -118,7 +147,7 @@ pub(crate) fn init() {
     // SAFETY: unsafe due to .bits usage and use of a mutable static (DESCRIPTORS.list)
     unsafe {
         // Descriptor base must be 1K aligned
-        let descriptor_base = ptr::addr_of!(DESCRIPTORS.list) as u32;
+        let descriptor_base = core::ptr::addr_of!(DESCRIPTORS.list) as u32;
         dmactl0.srambase().write(|w| w.bits(descriptor_base));
     }
 

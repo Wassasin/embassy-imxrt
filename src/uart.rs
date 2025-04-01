@@ -43,6 +43,7 @@ pub struct Uart<'a, M: Mode> {
 /// Uart TX driver.
 pub struct UartTx<'a, M: Mode> {
     info: Info,
+    state: &'static State,
     _tx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -50,6 +51,7 @@ pub struct UartTx<'a, M: Mode> {
 /// Uart RX driver.
 pub struct UartRx<'a, M: Mode> {
     info: Info,
+    state: &'static State,
     _rx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
@@ -141,6 +143,7 @@ impl<'a, M: Mode> UartTx<'a, M> {
     fn new_inner<T: Instance>(_tx_dma: Option<Channel<'a>>) -> Self {
         Self {
             info: T::info(),
+            state: T::state(),
             _tx_dma,
             _phantom: PhantomData,
         }
@@ -220,6 +223,7 @@ impl<'a, M: Mode> UartRx<'a, M> {
     fn new_inner<T: Instance>(_rx_dma: Option<Channel<'a>>) -> Self {
         Self {
             info: T::info(),
+            state: T::state(),
             _rx_dma,
             _phantom: PhantomData,
         }
@@ -569,7 +573,7 @@ impl<'a> UartTx<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    UART_WAKERS[self.info.index].register(cx.waker());
+                    self.state.waker.register(cx.waker());
 
                     self.info.regs.intenset().write(|w| {
                         w.framerren()
@@ -649,7 +653,7 @@ impl<'a> UartTx<'a, Async> {
             let r = f(self);
 
             if r.is_pending() {
-                UART_WAKERS[self.info.index].register(cx.waker());
+                self.state.waker.register(cx.waker());
                 g(self);
             }
 
@@ -698,7 +702,7 @@ impl<'a> UartRx<'a, Async> {
             let res = select(
                 transfer,
                 poll_fn(|cx| {
-                    UART_WAKERS[self.info.index].register(cx.waker());
+                    self.state.waker.register(cx.waker());
 
                     self.info.regs.intenset().write(|w| {
                         w.framerren()
@@ -1074,12 +1078,23 @@ impl embedded_io_async::Write for Uart<'_, Async> {
 
 struct Info {
     regs: &'static crate::pac::usart0::RegisterBlock,
-    index: usize,
+}
+
+struct State {
+    waker: AtomicWaker,
+}
+
+impl State {
+    pub const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+        }
+    }
 }
 
 trait SealedInstance {
     fn info() -> Info;
-    fn index() -> usize;
+    fn state() -> &'static State;
 }
 
 /// UART interrupt handler.
@@ -1087,12 +1102,9 @@ pub struct InterruptHandler<T: Instance> {
     _phantom: PhantomData<T>,
 }
 
-const UART_COUNT: usize = 8;
-static UART_WAKERS: [AtomicWaker; UART_COUNT] = [const { AtomicWaker::new() }; UART_COUNT];
-
 impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
-        let waker = &UART_WAKERS[T::index()];
+        let waker = &T::state().waker;
         let regs = T::info().regs;
         let stat = regs.intstat().read();
 
@@ -1131,23 +1143,22 @@ macro_rules! impl_instance {
     ($($n:expr),*) => {
 	$(
 	    paste!{
-		impl SealedInstance for crate::peripherals::[<FLEXCOMM $n>] {
-		    fn info() -> Info {
-			Info {
-			    regs: unsafe { &*crate::pac::[<Usart $n>]::ptr() },
-			    index: $n,
-			}
-		    }
+            impl SealedInstance for crate::peripherals::[<FLEXCOMM $n>] {
+                fn info() -> Info {
+                    Info {
+                        regs: unsafe { &*crate::pac::[<Usart $n>]::ptr() },
+                    }
+                }
 
-		    #[inline]
-		    fn index() -> usize {
-			$n
-		    }
-		}
+                fn state() -> &'static State {
+                    static STATE: State = State::new();
+                    &STATE
+                }
+            }
 
-		impl Instance for crate::peripherals::[<FLEXCOMM $n>] {
-		    type Interrupt = crate::interrupt::typelevel::[<FLEXCOMM $n>];
-		}
+            impl Instance for crate::peripherals::[<FLEXCOMM $n>] {
+                type Interrupt = crate::interrupt::typelevel::[<FLEXCOMM $n>];
+            }
 	    }
 	)*
     };

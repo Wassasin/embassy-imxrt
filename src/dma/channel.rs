@@ -209,4 +209,15 @@ impl<'d> Channel<'d> {
             .xfercfg()
             .modify(|_, w| w.swtrig().set_bit());
     }
+
+    /// Create a copy of a channel with an unbound 'static lifetime.
+    ///
+    /// It is the users responsibility that this is used safely.
+    /// Used in relation to driving the DMA channel from the ISR.
+    pub(crate) unsafe fn clone_unbound(&self) -> Channel<'static> {
+        Channel {
+            info: self.info.clone(),
+            _lifetime: PhantomData,
+        }
+    }
 }

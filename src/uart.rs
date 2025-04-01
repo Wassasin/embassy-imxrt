@@ -1,10 +1,13 @@
 //! Universal Asynchronous Receiver Transmitter (UART) driver.
 
+use core::cell::RefCell;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
+use critical_section::Mutex;
 use embassy_futures::select::{select, Either};
+use embassy_hal_internal::drop::OnDrop;
 use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use paste::paste;
@@ -17,6 +20,7 @@ use crate::interrupt::typelevel::Interrupt;
 use crate::iopctl::{DriveMode, DriveStrength, Inverter, IopctlPin, Pull, SlewRate};
 use crate::pac::usart0::cfg::{Clkpol, Datalen, Loop, Paritysel as Parity, Stoplen, Syncen, Syncmst};
 use crate::pac::usart0::ctl::Cc;
+use crate::util::{AtomicSlice, Immutable, Mutable};
 use crate::{dma, interrupt};
 
 /// Driver move trait.
@@ -44,7 +48,7 @@ pub struct Uart<'a, M: Mode> {
 pub struct UartTx<'a, M: Mode> {
     info: Info,
     state: &'static State,
-    _tx_dma: Option<Channel<'a>>,
+    tx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
 
@@ -52,7 +56,7 @@ pub struct UartTx<'a, M: Mode> {
 pub struct UartRx<'a, M: Mode> {
     info: Info,
     state: &'static State,
-    _rx_dma: Option<Channel<'a>>,
+    rx_dma: Option<Channel<'a>>,
     _phantom: PhantomData<(&'a (), M)>,
 }
 
@@ -140,11 +144,11 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 impl<'a, M: Mode> UartTx<'a, M> {
-    fn new_inner<T: Instance>(_tx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(tx_dma: Option<Channel<'a>>) -> Self {
         Self {
             info: T::info(),
             state: T::state(),
-            _tx_dma,
+            tx_dma,
             _phantom: PhantomData,
         }
     }
@@ -220,11 +224,11 @@ impl<'a> UartTx<'a, Blocking> {
 }
 
 impl<'a, M: Mode> UartRx<'a, M> {
-    fn new_inner<T: Instance>(_rx_dma: Option<Channel<'a>>) -> Self {
+    fn new_inner<T: Instance>(rx_dma: Option<Channel<'a>>) -> Self {
         Self {
             info: T::info(),
             state: T::state(),
-            _rx_dma,
+            rx_dma,
             _phantom: PhantomData,
         }
     }
@@ -564,7 +568,7 @@ impl<'a> UartTx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmatx().enabled());
 
             let transfer = Transfer::new_write(
-                self._tx_dma.as_ref().unwrap(),
+                self.tx_dma.as_ref().unwrap(),
                 chunk,
                 regs.fifowr().as_ptr() as *mut u8,
                 Default::default(),
@@ -693,7 +697,7 @@ impl<'a> UartRx<'a, Async> {
             regs.fifocfg().modify(|_, w| w.dmarx().enabled());
 
             let transfer = Transfer::new_read(
-                self._rx_dma.as_ref().unwrap(),
+                self.rx_dma.as_ref().unwrap(),
                 regs.fiford().as_ptr() as *mut u8,
                 chunk,
                 Default::default(),
@@ -1082,14 +1086,42 @@ struct Info {
 
 struct State {
     waker: AtomicWaker,
+    rx_buf: AtomicSlice<u8, Mutable>,
+    rx_dma: Mutex<RefCell<Option<Channel<'static>>>>,
+    tx_buf: AtomicSlice<u8, Immutable>,
+    tx_dma: Mutex<RefCell<Option<Channel<'static>>>>,
 }
 
 impl State {
     pub const fn new() -> Self {
         Self {
             waker: AtomicWaker::new(),
+            rx_buf: AtomicSlice::new(),
+            rx_dma: Mutex::new(RefCell::new(None)),
+            tx_buf: AtomicSlice::new(),
+            tx_dma: Mutex::new(RefCell::new(None)),
         }
     }
+}
+
+/// Borrow the channel for an ISR, erasing the channel from the ISR state when done.
+///
+/// Unsafe because it allows the user of the Channel to still commit lifetime crimes.
+unsafe fn borrow_channel<'a>(
+    dma: &'a Channel<'a>,
+    target: &'static Mutex<RefCell<Option<Channel<'static>>>>,
+) -> OnDrop<impl FnOnce() + 'a> {
+    let dma = unsafe { dma.clone_unbound() };
+
+    critical_section::with(|cs| {
+        target.borrow_ref_mut(cs).replace(dma);
+    });
+
+    OnDrop::new(|| {
+        critical_section::with(|cs| {
+            target.borrow_ref_mut(cs).take();
+        });
+    })
 }
 
 trait SealedInstance {

@@ -173,6 +173,15 @@ struct DmaInfo {
     ch_num: usize,
 }
 
+impl Clone for DmaInfo {
+    fn clone(&self) -> Self {
+        Self {
+            regs: unsafe { crate::pac::Dma0::steal() },
+            ch_num: self.ch_num,
+        }
+    }
+}
+
 impl<'d> Dma<'d> {
     /// Reserves a DMA channel for exclusive use
     pub fn reserve_channel<T: Instance>(_inner: Peri<'d, T>) -> Option<Channel<'d>> {

@@ -21,21 +21,21 @@ const LAST_BLOCK_MAX_DATA: usize = BLOCK_LEN - 9;
 
 static WAKER: AtomicWaker = AtomicWaker::new();
 
-#[cfg(feature = "rt")]
-#[interrupt]
-fn HASHCRYPT() {
-    let reg = unsafe { crate::pac::Hashcrypt::steal() };
+// #[cfg(feature = "rt")]
+// #[interrupt]
+// fn HASHCRYPT() {
+//     let reg = unsafe { crate::pac::Hashcrypt::steal() };
 
-    if reg.status().read().error().is_error() {
-        reg.intenclr().write(|w| w.error().clear_bit_by_one());
-        WAKER.wake();
-    }
+//     if reg.status().read().error().is_error() {
+//         reg.intenclr().write(|w| w.error().clear_bit_by_one());
+//         WAKER.wake();
+//     }
 
-    if reg.status().read().digest().is_ready() {
-        reg.intenclr().write(|w| w.digest().clear_bit_by_one());
-        WAKER.wake();
-    }
-}
+//     if reg.status().read().digest().is_ready() {
+//         reg.intenclr().write(|w| w.digest().clear_bit_by_one());
+//         WAKER.wake();
+//     }
+// }
 
 /// A hasher
 pub struct Hasher<'d, 'a, M: Mode> {

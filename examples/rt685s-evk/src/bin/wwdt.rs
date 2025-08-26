@@ -4,6 +4,7 @@
 use cortex_m::peripheral::NVIC;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
+use embassy_imxrt::gpio;
 use embassy_imxrt::pac::{interrupt, Interrupt};
 use embassy_imxrt::wwdt::WindowedWatchdog;
 use embassy_time::Timer;
@@ -18,6 +19,14 @@ async fn main(_spawner: Spawner) {
 
     unsafe { NVIC::unmask(Interrupt::WDT0) };
 
+    let mut led = gpio::Output::new(
+        p.PIO0_26,
+        gpio::Level::High,
+        gpio::DriveMode::PushPull,
+        gpio::DriveStrength::Normal,
+        gpio::SlewRate::Standard,
+    );
+
     wwdt.unleash();
     info!("Watchdog enabled!");
 
@@ -28,6 +37,8 @@ async fn main(_spawner: Spawner) {
             wwdt.feed();
             feed_count -= 1;
             info!("Reset in {} μs if feed does not occur", wwdt.timeout());
+        } else {
+            led.set_low();
         }
 
         Timer::after_millis(1000).await;

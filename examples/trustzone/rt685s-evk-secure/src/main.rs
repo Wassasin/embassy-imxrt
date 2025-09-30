@@ -43,6 +43,7 @@ const VTOR_NS: *mut u32 = 0xE002ED08 as *mut u32;
 fn main() -> ! {
     debug_rtt_init_print!();
     let mut cp = cortex_m::Peripherals::take().unwrap();
+    let dp = mimxrt685s_pac::Peripherals::take().unwrap();
 
     unsafe {
         let [nonsecure_sp, nonsecure_reset] = NONSECURE_START_FLASH.read_volatile();
@@ -56,9 +57,17 @@ fn main() -> ! {
         }
 
         debug_rprintln!("Setting up regions");
-        debug_rprintln!("Veneers: {:#010X} .. {:#010X}", &raw const __veneer_base as u32, &raw const __veneer_limit as u32);
+        debug_rprintln!(
+            "Veneers: {:#010X} .. {:#010X}",
+            &raw const __veneer_base as u32,
+            &raw const __veneer_limit as u32
+        );
+
+        // Make sure all writes and reads are done before changing the security settings
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+
         // Set all regions not used by this program to non-secure
-        // Before flash
         cp.SAU
             .set_region(
                 0,
@@ -100,6 +109,27 @@ fn main() -> ! {
             )
             .unwrap();
         cp.SAU.enable();
+
+        // TODO: This doesn't quite work. Makes the nonsecure app crash. Need to investigate
+        // // Then set the ROM to secure only
+        // // The nonsecure code can only control nonsecure peripherals like DMA
+        // for rom_mem in dp.ahb_secure_ctrl.rom_mem_rule_iter() {
+        //     rom_mem.write(|w| {
+        //         w.rule0().secure_nonpriv_user_allowed();
+        //         w.rule1().secure_nonpriv_user_allowed();
+        //         w.rule2().secure_nonpriv_user_allowed();
+        //         w.rule3().secure_nonpriv_user_allowed();
+        //         w.rule4().secure_nonpriv_user_allowed();
+        //         w.rule5().secure_nonpriv_user_allowed();
+        //         w.rule6().secure_nonpriv_user_allowed();
+        //         w.rule7().secure_nonpriv_user_allowed()
+        //     });
+        // }
+
+        // Make sure the new settings take effect immediately:
+        // https://developer.arm.com/documentation/100235/0100/The-Cortex-M33-Peripherals/Security-Attribution-and--Memory-Protection/Updating-protected-memory-regions
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         // Set the nonsecure VTOR
         VTOR_NS.write_volatile(NONSECURE_START_FLASH as u32);

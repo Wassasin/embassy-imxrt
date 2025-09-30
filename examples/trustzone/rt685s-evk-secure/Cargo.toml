@@ -10,7 +10,7 @@ cortex-m = { version = "0.7.7", features = [
     "critical-section-single-core",
 ] }
 cortex-m-rt = "0.7.3"
-mimxrt685s-pac = { version = "0.5.0", optional = true, features = [
+mimxrt685s-pac = { version = "0.5.0", features = [
     "rt",
     "critical-section",
 ] }

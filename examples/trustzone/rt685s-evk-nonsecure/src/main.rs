@@ -7,6 +7,10 @@ use embassy_imxrt::gpio;
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
+unsafe extern "C" {
+    safe fn do_stuff_secure(num: u32) -> u32;
+}
+
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_imxrt::init(Default::default());
@@ -25,5 +29,6 @@ async fn main(_spawner: Spawner) {
         info!("Toggling LED");
         led.toggle();
         Timer::after_millis(1000).await;
+        info!("Secure stuff: {}", do_stuff_secure(5));
     }
 }

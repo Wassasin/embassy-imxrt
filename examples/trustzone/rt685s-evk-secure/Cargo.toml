@@ -15,3 +15,4 @@ mimxrt685s-pac = { version = "0.5.0", optional = true, features = [
     "critical-section",
 ] }
 mimxrt600-fcb = "0.2.2"
+rtt-target = "0.6.1"

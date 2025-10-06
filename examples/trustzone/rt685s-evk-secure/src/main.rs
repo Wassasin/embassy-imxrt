@@ -3,6 +3,7 @@
 #![feature(abi_cmse_nonsecure_call)]
 #![feature(cmse_nonsecure_entry)]
 
+use core::ops::Range;
 use core::panic::PanicInfo;
 use core::sync::atomic::AtomicU32;
 use core::u32;
@@ -59,9 +60,6 @@ fn main() -> ! {
     let dp = mimxrt685s_pac::Peripherals::take().unwrap();
 
     unsafe {
-        // Enable the secure fault
-        cp.SCB.shcsr.modify(|w| w | (1 << 19));
-
         let [nonsecure_sp, nonsecure_reset] = NONSECURE_START_FLASH.read_volatile();
 
         rprintln!("Running. SP: {:#010X}, RV: {:#010X}", nonsecure_sp, nonsecure_reset);
@@ -162,10 +160,51 @@ fn main() -> ! {
         // Create the right function pointer to the reset vector
         let nonsecure_reset =
             core::mem::transmute::<*const u32, extern "cmse-nonsecure-call" fn()>(nonsecure_reset as *const u32);
+
+        // Enable the secure fault
+        cp.SCB.shcsr.modify(|w| w | (1 << 19));
+        // Prioritize and allow faults in the non-secure side
+        cp.SCB.aircr.modify(|w| w & !(1 << 14) & !(1 << 13));
+
         // Jump
         nonsecure_reset();
 
         cortex_m::asm::udf();
+    }
+}
+
+fn set_ram_secure(mut region: Range<u32>) {
+    let address_to_block = |address: u32| {
+        const BLOCK_SIZE_TABLE: &[(u32, u32, u32)] = &[
+            (0x2010_0000, 8, 0x4_0000 / 0x400 + 0x4_0000 / 0x800 + 0x8_0000 / 0x1000),
+            (0x2008_0000, 4, 0x4_0000 / 0x400 + 0x4_0000 / 0x800),
+            (0x2004_0000, 2, 0x4_0000 / 0x400),
+            (0x2000_0000, 1, 0),
+        ];
+
+        let (block_start, block_size, previous_blocks) = BLOCK_SIZE_TABLE
+            .iter()
+            .find(|(block_address, _, _)| address >= *block_address)
+            .unwrap();
+
+        (
+            *previous_blocks + (address - *block_start) / *block_size,
+            *block_start,
+            *block_size,
+        )
+    };
+
+    // Make sure the end of the range is at a boundary
+    let (_, block_start, _) = address_to_block(region.end);
+    assert_eq!(region.end, block_start);
+
+    while !region.is_empty() {
+        let (block_index, block_start, block_size) = address_to_block(region.start);
+        assert_eq!(region.start, block_start);
+
+        // TODO: Mark the block at index as secure
+
+        region.start += block_size;
     }
 }
 

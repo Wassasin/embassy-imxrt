@@ -4,6 +4,7 @@
 use core::mem::MaybeUninit;
 
 use embassy_executor::Spawner;
+use embassy_imxrt::dma::transfer::TransferOptions;
 use embassy_imxrt::gpio;
 use embassy_time::Timer;
 use panic_probe as _;
@@ -40,10 +41,43 @@ async fn main(_spawner: Spawner) {
         gpio::SlewRate::Standard,
     );
 
+    let channel = embassy_imxrt::dma::Dma::reserve_channel(p.DMA0_CH0).unwrap();
+
     loop {
         rprintln!("Toggling LED");
         led.toggle();
         Timer::after_millis(1000).await;
         rprintln!("Secure stuff: {}", do_stuff_secure(5));
+
+        let mut counter = 0u32;
+        embassy_imxrt::dma::transfer::Transfer::new_raw_transfer(
+            &channel,
+            embassy_imxrt::dma::transfer::Direction::MemoryToMemory,
+            0x20080000 as *const u32,
+            &raw mut counter,
+            4,
+            TransferOptions {
+                width: embassy_imxrt::dma::transfer::Width::Bit32,
+                priority: embassy_imxrt::dma::transfer::Priority::Priority0,
+            },
+        )
+        .await;
+
+        rprintln!("counter: {:X?}", counter);
+
+        counter += 1;
+
+        embassy_imxrt::dma::transfer::Transfer::new_raw_transfer(
+            &channel,
+            embassy_imxrt::dma::transfer::Direction::MemoryToMemory,
+            &raw const counter,
+            0x20080000 as *mut u32,
+            4,
+            TransferOptions {
+                width: embassy_imxrt::dma::transfer::Width::Bit32,
+                priority: embassy_imxrt::dma::transfer::Priority::Priority0,
+            },
+        )
+        .await;
     }
 }

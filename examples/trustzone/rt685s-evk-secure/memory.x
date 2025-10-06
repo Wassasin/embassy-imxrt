@@ -4,7 +4,8 @@ MEMORY {
     BIV      : ORIGIN = 0x08000600, LENGTH = 4,
     KEYSTORE : ORIGIN = 0x08000800, LENGTH = 2K,
     FLASH    : ORIGIN = 0x08001000, LENGTH = 20k,
-    RAM      : ORIGIN = 0x20080000, LENGTH = 4K
+    RAM      : ORIGIN = 0x20080000, LENGTH = 4K,
+    SHAREDRTT : ORIGIN = 0x20081800, LENGTH = 2K
 }
 
 SECTIONS {
@@ -31,4 +32,11 @@ SECTIONS {
         KEEP(* (.keystore))
         . = ALIGN(4);
     } > KEYSTORE
+
+    .shared_rtt : {
+        . = ALIGN(4);
+        KEEP(* (.shared_rtt.header))
+        KEEP(* (.shared_rtt.buffer))
+        . = ALIGN(4);
+    } > SHAREDRTT
 }

@@ -9,7 +9,8 @@ use core::u32;
 
 use cortex_m::peripheral::sau::SauRegion;
 use mimxrt600_fcb::FlexSPIFlashConfigurationBlock;
-use rtt_target::{debug_rprintln, debug_rtt_init_print};
+use rtt_target::ChannelMode::NoBlockSkip;
+use rtt_target::{debug_rprintln, rprintln};
 
 // auto-generated version information from Cargo.toml
 include!(concat!(env!("OUT_DIR"), "/biv.rs"));
@@ -41,14 +42,29 @@ const VTOR_NS: *mut u32 = 0xE002ED08 as *mut u32;
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    debug_rtt_init_print!();
+    let channels = rtt_target::rtt_init! {
+        up: {
+            0: { // channel number
+                size: 1024, // buffer size in bytes
+                mode: NoBlockSkip, // mode (optional, default: NoBlockSkip, see enum ChannelMode)
+                name: "Terminal", // name (optional, default: no name)
+                section: ".shared_rtt.buffer" // Buffer linker section (optional, default: no section)
+            }
+        }
+        section_cb: ".shared_rtt.header" // Control block linker section (optional, default: no section)
+    };
+    rtt_target::set_print_channel(channels.up.0);
+
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = mimxrt685s_pac::Peripherals::take().unwrap();
 
     unsafe {
+        // Enable the secure fault
+        cp.SCB.shcsr.modify(|w| w | (1 << 19));
+
         let [nonsecure_sp, nonsecure_reset] = NONSECURE_START_FLASH.read_volatile();
 
-        debug_rprintln!("Running. SP: {:#010X}, RV: {:#010X}", nonsecure_sp, nonsecure_reset);
+        rprintln!("Running. SP: {:#010X}, RV: {:#010X}", nonsecure_sp, nonsecure_reset);
 
         if nonsecure_sp == u32::MAX || nonsecure_reset == u32::MAX {
             loop {
@@ -56,8 +72,8 @@ fn main() -> ! {
             }
         }
 
-        debug_rprintln!("Setting up regions");
-        debug_rprintln!(
+        rprintln!("Setting up regions");
+        rprintln!(
             "Veneers: {:#010X} .. {:#010X}",
             &raw const __veneer_base as u32,
             &raw const __veneer_limit as u32
@@ -110,21 +126,20 @@ fn main() -> ! {
             .unwrap();
         cp.SAU.enable();
 
-        // TODO: This doesn't quite work. Makes the nonsecure app crash. Need to investigate
-        // // Then set the ROM to secure only
-        // // The nonsecure code can only control nonsecure peripherals like DMA
-        // for rom_mem in dp.ahb_secure_ctrl.rom_mem_rule_iter() {
-        //     rom_mem.write(|w| {
-        //         w.rule0().secure_nonpriv_user_allowed();
-        //         w.rule1().secure_nonpriv_user_allowed();
-        //         w.rule2().secure_nonpriv_user_allowed();
-        //         w.rule3().secure_nonpriv_user_allowed();
-        //         w.rule4().secure_nonpriv_user_allowed();
-        //         w.rule5().secure_nonpriv_user_allowed();
-        //         w.rule6().secure_nonpriv_user_allowed();
-        //         w.rule7().secure_nonpriv_user_allowed()
-        //     });
-        // }
+        // Then set the ROM to secure only
+        // The nonsecure code can only control nonsecure peripherals like DMA
+        for rom_mem in dp.ahb_secure_ctrl.rom_mem_rule_iter() {
+            rom_mem.write(|w| {
+                w.rule0().secure_nonpriv_user_allowed();
+                w.rule1().secure_nonpriv_user_allowed();
+                w.rule2().secure_nonpriv_user_allowed();
+                w.rule3().secure_nonpriv_user_allowed();
+                w.rule4().secure_nonpriv_user_allowed();
+                w.rule5().secure_nonpriv_user_allowed();
+                w.rule6().secure_nonpriv_user_allowed();
+                w.rule7().secure_nonpriv_user_allowed()
+            });
+        }
 
         // Make sure the new settings take effect immediately:
         // https://developer.arm.com/documentation/100235/0100/The-Cortex-M33-Peripherals/Security-Attribution-and--Memory-Protection/Updating-protected-memory-regions
@@ -142,7 +157,7 @@ fn main() -> ! {
         // Set the non-secure stack pointer
         cortex_m::register::msp::write_ns(nonsecure_sp);
 
-        debug_rprintln!("Jumping");
+        rprintln!("Jumping");
 
         // Create the right function pointer to the reset vector
         let nonsecure_reset =
@@ -154,8 +169,22 @@ fn main() -> ! {
     }
 }
 
+#[cortex_m_rt::exception]
+unsafe fn SecureFault() -> ! {
+    let sau = &*cortex_m::peripheral::SAU::PTR;
+    rprintln!(
+        "SecureFault! - SFSR: {:#010X}, SFAR: {:#010X}",
+        sau.sfsr.read().0,
+        sau.sfar.read().0
+    );
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
 #[cortex_m_rt::exception(trampoline = false)]
 unsafe fn HardFault() -> ! {
+    rprintln!("HardFault!");
     loop {
         cortex_m::asm::nop();
     }

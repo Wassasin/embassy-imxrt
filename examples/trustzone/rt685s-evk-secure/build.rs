@@ -50,5 +50,5 @@ static BOOT_IMAGE_VERSION: u32 = 0x{:02x}{:02x}{:02x}{:02x};
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
 
     println!("cargo:rustc-link-arg=--cmse-implib");
-    println!("cargo:rustc-link-arg=--out-implib=target/veneers.o",);
+    println!("cargo:rustc-link-arg=--out-implib=target/veneers.o");
 }

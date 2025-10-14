@@ -10,8 +10,10 @@ use core::u32;
 
 use cortex_m::peripheral::sau::SauRegion;
 use mimxrt600_fcb::FlexSPIFlashConfigurationBlock;
+use mimxrt685s_pac::ahb_secure_ctrl::ram00_rule::Rule0;
+use mimxrt685s_pac::{ahb_secure_ctrl, AhbSecureCtrl};
+use rtt_target::rprintln;
 use rtt_target::ChannelMode::NoBlockSkip;
-use rtt_target::{debug_rprintln, rprintln};
 
 // auto-generated version information from Cargo.toml
 include!(concat!(env!("OUT_DIR"), "/biv.rs"));
@@ -31,8 +33,8 @@ static KEYSTORE: [u8; 2048] = [0; 2048];
 
 const SECURE_START_FLASH: u32 = 0x08001000;
 const NONSECURE_START_FLASH: *const [u32; 2] = 0x08006000 as *const [u32; 2];
-const SECURE_START_RAM: u32 = 0x20080000;
-const NONSECURE_START_RAM: u32 = 0x20081000;
+const SECURE_START_RAM: u32 = 0x20000000;
+const NONSECURE_START_RAM: u32 = 0x20001000;
 
 extern "Rust" {
     static __veneer_base: ();
@@ -57,7 +59,7 @@ fn main() -> ! {
     rtt_target::set_print_channel(channels.up.0);
 
     let mut cp = cortex_m::Peripherals::take().unwrap();
-    let dp = mimxrt685s_pac::Peripherals::take().unwrap();
+    let _dp = mimxrt685s_pac::Peripherals::take().unwrap();
 
     unsafe {
         let [nonsecure_sp, nonsecure_reset] = NONSECURE_START_FLASH.read_volatile();
@@ -81,7 +83,9 @@ fn main() -> ! {
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        // Set all regions not used by this program to non-secure
+        // Set all regions not used by this program to non-secure.
+        // This only concerns the CM33 access, not any of the other bus masters like DMA
+        rprintln!("Set SAU");
         cp.SAU
             .set_region(
                 0,
@@ -125,8 +129,9 @@ fn main() -> ! {
         cp.SAU.enable();
 
         // Then set the ROM to secure only
-        // The nonsecure code can only control nonsecure peripherals like DMA
-        for rom_mem in dp.ahb_secure_ctrl.rom_mem_rule_iter() {
+        rprintln!("Set ROM to secure");
+        let ahb_secure_ctrl = &*AhbSecureCtrl::ptr().add(0x1000_0000);
+        for rom_mem in ahb_secure_ctrl.rom_mem_rule_iter() {
             rom_mem.write(|w| {
                 w.rule0().secure_nonpriv_user_allowed();
                 w.rule1().secure_nonpriv_user_allowed();
@@ -138,6 +143,72 @@ fn main() -> ! {
                 w.rule7().secure_nonpriv_user_allowed()
             });
         }
+        // Set the secure RAM to secure only
+        rprintln!("Set RAM to secure");
+        set_ram_secure(SECURE_START_RAM..NONSECURE_START_RAM, ahb_secure_ctrl);
+
+        rprintln!("Setting all bus masters to non-secure");
+        ahb_secure_ctrl.master_sec_level().write(|w| {
+            w.dma0_sec()
+                .enum_ns_np()
+                .dma1_sec()
+                .enum_ns_np()
+                .dsp_sec()
+                .enum_ns_np()
+                .powerquad_sec()
+                .enum_ns_np()
+                .sdio0_sec()
+                .enum_ns_np()
+                .sdio1_sec()
+                .enum_ns_np()
+                .master_sec_level_lock()
+                .writable()
+        });
+        ahb_secure_ctrl.master_sec_level_anti_pol().write(|w| {
+            w.dma0_sec()
+                .enum_ns_np()
+                .dma1_sec()
+                .enum_ns_np()
+                .dsp_sec()
+                .enum_s_p()
+                .powerquad_sec()
+                .enum_ns_np()
+                .sdio0_sec()
+                .enum_ns_np()
+                .sdio1_sec()
+                .enum_ns_np()
+                .master_sec_level_anti_pole_lock()
+                .writable()
+        });
+        rprintln!(
+            "master_sec_level: {:#010X}, {:#010X}",
+            ahb_secure_ctrl.master_sec_level().read().bits(),
+            ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
+        );
+
+        rprintln!("Enabling AHB bus checks");
+        ahb_secure_ctrl.misc_ctrl_reg().write(|w| {
+            w.enable_ns_priv_check()
+                .enable()
+                .enable_secure_checking()
+                .enable()
+                .enable_s_priv_check()
+                .enable()
+        });
+        ahb_secure_ctrl.misc_ctrl_dp_reg().write(|w| {
+            w.enable_ns_priv_check()
+                .enable()
+                .enable_secure_checking()
+                .enable()
+                .enable_s_priv_check()
+                .enable()
+        });
+
+        rprintln!(
+            "misc_ctrl_reg: {:#010X}, {:#010X}",
+            ahb_secure_ctrl.misc_ctrl_reg().read().bits(),
+            ahb_secure_ctrl.misc_ctrl_dp_reg().read().bits()
+        );
 
         // Make sure the new settings take effect immediately:
         // https://developer.arm.com/documentation/100235/0100/The-Cortex-M33-Peripherals/Security-Attribution-and--Memory-Protection/Updating-protected-memory-regions
@@ -164,7 +235,7 @@ fn main() -> ! {
         // Enable the secure fault
         cp.SCB.shcsr.modify(|w| w | (1 << 19));
         // Prioritize and allow faults in the non-secure side
-        cp.SCB.aircr.modify(|w| w & !(1 << 14) & !(1 << 13));
+        // cp.SCB.aircr.modify(|w| w & !(1 << 14) & !(1 << 13));
 
         // Jump
         nonsecure_reset();
@@ -173,13 +244,17 @@ fn main() -> ! {
     }
 }
 
-fn set_ram_secure(mut region: Range<u32>) {
+fn set_ram_secure(mut region: Range<u32>, ahb_secure_ctrl: &ahb_secure_ctrl::RegisterBlock) {
     let address_to_block = |address: u32| {
         const BLOCK_SIZE_TABLE: &[(u32, u32, u32)] = &[
-            (0x2010_0000, 8, 0x4_0000 / 0x400 + 0x4_0000 / 0x800 + 0x8_0000 / 0x1000),
-            (0x2008_0000, 4, 0x4_0000 / 0x400 + 0x4_0000 / 0x800),
-            (0x2004_0000, 2, 0x4_0000 / 0x400),
-            (0x2000_0000, 1, 0),
+            (
+                0x2010_0000,
+                8192,
+                0x4_0000 / 0x400 + 0x4_0000 / 0x800 + 0x8_0000 / 0x1000,
+            ),
+            (0x2008_0000, 4096, 0x4_0000 / 0x400 + 0x4_0000 / 0x800),
+            (0x2004_0000, 2048, 0x4_0000 / 0x400),
+            (0x2000_0000, 1024, 0),
         ];
 
         let (block_start, block_size, previous_blocks) = BLOCK_SIZE_TABLE
@@ -189,7 +264,7 @@ fn set_ram_secure(mut region: Range<u32>) {
 
         (
             *previous_blocks + (address - *block_start) / *block_size,
-            *block_start,
+            *block_start + (address - *block_start) / *block_size * *block_size,
             *block_size,
         )
     };
@@ -202,7 +277,26 @@ fn set_ram_secure(mut region: Range<u32>) {
         let (block_index, block_start, block_size) = address_to_block(region.start);
         assert_eq!(region.start, block_start);
 
-        // TODO: Mark the block at index as secure
+        let register_index = block_index / 8;
+        let rule_index = block_index % 8;
+
+        let base_ptr = ahb_secure_ctrl.ram00_rule(0).as_ptr();
+
+        rprintln!(
+            "Ram region {:#010X}..{:#010X} to secure ({}, {})",
+            block_start,
+            block_start + block_size - 1,
+            register_index,
+            rule_index
+        );
+
+        unsafe {
+            let target_register = base_ptr.add(register_index as usize);
+            let current_val = target_register.read_volatile();
+            target_register.write_volatile(
+                current_val & !(0b11 << (rule_index * 4)) | ((Rule0::SecurePrivUserAllowed as u32) << (rule_index * 4)),
+            );
+        }
 
         region.start += block_size;
     }
@@ -231,7 +325,7 @@ unsafe fn HardFault() -> ! {
 
 #[panic_handler]
 fn panic(i: &PanicInfo) -> ! {
-    debug_rprintln!("{}", i);
+    rprintln!("{}", i);
     cortex_m::asm::udf();
 }
 

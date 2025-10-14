@@ -43,41 +43,54 @@ async fn main(_spawner: Spawner) {
 
     let channel = embassy_imxrt::dma::Dma::reserve_channel(p.DMA0_CH0).unwrap();
 
-    loop {
-        rprintln!("Toggling LED");
-        led.toggle();
-        Timer::after_millis(1000).await;
-        rprintln!("Secure stuff: {}", do_stuff_secure(5));
+    rprintln!("Toggling LED");
+    led.toggle();
+    Timer::after_millis(1000).await;
+    rprintln!("Toggling LED");
+    led.toggle();
 
-        let mut counter = 0u32;
-        embassy_imxrt::dma::transfer::Transfer::new_raw_transfer(
-            &channel,
-            embassy_imxrt::dma::transfer::Direction::MemoryToMemory,
-            0x20080000 as *const u32,
-            &raw mut counter,
-            4,
-            TransferOptions {
-                width: embassy_imxrt::dma::transfer::Width::Bit32,
-                priority: embassy_imxrt::dma::transfer::Priority::Priority0,
-            },
-        )
-        .await;
+    rprintln!("Calling secure function: {}", do_stuff_secure(5));
 
-        rprintln!("counter: {:X?}", counter);
+    rprintln!("Trying to get DMA access to secure memory");
+    let mut counter = 0u32;
+    embassy_imxrt::dma::transfer::Transfer::new_raw_transfer(
+        &channel,
+        embassy_imxrt::dma::transfer::Direction::MemoryToMemory,
+        0x20000000 as *const u32,
+        &raw mut counter,
+        4,
+        TransferOptions {
+            width: embassy_imxrt::dma::transfer::Width::Bit32,
+            priority: embassy_imxrt::dma::transfer::Priority::Priority0,
+        },
+    )
+    .await;
 
-        counter += 1;
+    rprintln!("counter: {:X?}", counter);
 
-        embassy_imxrt::dma::transfer::Transfer::new_raw_transfer(
-            &channel,
-            embassy_imxrt::dma::transfer::Direction::MemoryToMemory,
-            &raw const counter,
-            0x20080000 as *mut u32,
-            4,
-            TransferOptions {
-                width: embassy_imxrt::dma::transfer::Width::Bit32,
-                priority: embassy_imxrt::dma::transfer::Priority::Priority0,
-            },
-        )
-        .await;
-    }
+    counter += 1;
+
+    embassy_imxrt::dma::transfer::Transfer::new_raw_transfer(
+        &channel,
+        embassy_imxrt::dma::transfer::Direction::MemoryToMemory,
+        &raw const counter,
+        0x20000000 as *mut u32,
+        4,
+        TransferOptions {
+            width: embassy_imxrt::dma::transfer::Width::Bit32,
+            priority: embassy_imxrt::dma::transfer::Priority::Priority0,
+        },
+    )
+    .await;
+
+    rprintln!("Oh no! The DMA worked!: {}", do_stuff_secure(5));
+
+    rprintln!("Trying to get CPU access to secure memory");
+    counter = unsafe { (0x20000000 as *const u32).read_volatile() };
+    rprintln!("counter: {:X?}", counter);
+    counter += 1;
+    unsafe { (0x20000000 as *mut u32).write_volatile(counter) }
+    rprintln!("Oh no! The CPU worked!: {}", do_stuff_secure(5));
+
+    cortex_m::asm::bkpt();
 }

@@ -23,4 +23,5 @@ fn main() {
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
 
     println!("cargo:rustc-link-arg=target/veneers.o");
+    println!("cargo:rerun-if-changed=target/veneers.o");
 }

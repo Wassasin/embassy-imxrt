@@ -11,9 +11,9 @@ use core::u32;
 use cortex_m::peripheral::sau::SauRegion;
 use cortex_m::peripheral::{NVIC, SCB};
 use mimxrt685s_pac::ahb_secure_ctrl::ram00_rule::Rule0;
-use mimxrt685s_pac::{ahb_secure_ctrl, interrupt, AhbSecureCtrl, Interrupt, ScnScb};
-use rtt_target::rprintln;
-use rtt_target::ChannelMode::NoBlockSkip;
+use mimxrt685s_pac::{ahb_secure_ctrl, interrupt, AhbSecureCtrl, Clkctl0, Clkctl1, Gpio, Interrupt, Rstctl1, ScnScb};
+// use // rtt_target::rprintln;
+// use // rtt_target::ChannelMode::NoBlockSkip;
 
 // auto-generated version information from Cargo.toml
 include!(concat!(env!("OUT_DIR"), "/biv.rs"));
@@ -42,26 +42,26 @@ const VTOR_NS: *mut u32 = 0xE002ED08 as *mut u32;
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
-    let channels = rtt_target::rtt_init! {
-        up: {
-            0: { // channel number
-                size: 1024, // buffer size in bytes
-                mode: NoBlockSkip, // mode (optional, default: NoBlockSkip, see enum ChannelMode)
-                name: "Terminal", // name (optional, default: no name)
-                section: ".shared_rtt.buffer" // Buffer linker section (optional, default: no section)
-            }
-        }
-        section_cb: ".shared_rtt.header" // Control block linker section (optional, default: no section)
-    };
-    rtt_target::set_print_channel(channels.up.0);
+    // let channels = // rtt_target::rtt_init! {
+    //     up: {
+    //         0: { // channel number
+    //             size: 1024, // buffer size in bytes
+    //             mode: NoBlockSkip, // mode (optional, default: NoBlockSkip, see enum ChannelMode)
+    //             name: "Terminal", // name (optional, default: no name)
+    //             section: ".shared_rtt.buffer" // Buffer linker section (optional, default: no section)
+    //         }
+    //     }
+    //     section_cb: ".shared_rtt.header" // Control block linker section (optional, default: no section)
+    // };
+    // // rtt_target::set_print_channel(channels.up.0);
 
     let mut cp = cortex_m::Peripherals::take().unwrap();
-    let _dp = mimxrt685s_pac::Peripherals::take().unwrap();
+    let dp = mimxrt685s_pac::Peripherals::take().unwrap();
 
     unsafe {
         let [nonsecure_sp, nonsecure_reset] = NONSECURE_START_FLASH.read_volatile();
 
-        rprintln!("Running. SP: {:#010X}, RV: {:#010X}", nonsecure_sp, nonsecure_reset);
+        // rprintln!("Running. SP: {:#010X}, RV: {:#010X}", nonsecure_sp, nonsecure_reset);
 
         if nonsecure_sp == u32::MAX || nonsecure_reset == u32::MAX {
             loop {
@@ -71,7 +71,7 @@ fn main() -> ! {
 
         let ahb_secure_ctrl = &*AhbSecureCtrl::ptr().add(0x1000_0000);
 
-        // rprintln!("Configuring secure_violation_irq");
+        // // rprintln!("Configuring secure_violation_irq");
         ahb_secure_ctrl.misc_ctrl_reg().modify(|_, w| {
             w.disable_violation_abort()
                 .enable()
@@ -101,12 +101,12 @@ fn main() -> ! {
             // .tier_mode()
         });
 
-        rprintln!("Setting up regions");
-        rprintln!(
-            "Veneers: {:#010X} .. {:#010X}",
-            &raw const __veneer_base as u32,
-            &raw const __veneer_limit as u32
-        );
+        // // rprintln!("Setting up regions");
+        // // rprintln!(
+        //     "Veneers: {:#010X} .. {:#010X}",
+        //     &raw const __veneer_base as u32,
+        //     &raw const __veneer_limit as u32
+        // );
 
         NVIC::unmask(Interrupt::SECUREVIOLATION);
 
@@ -116,7 +116,7 @@ fn main() -> ! {
 
         // Set all regions not used by this program to non-secure.
         // This only concerns the CM33 access, not any of the other bus masters like DMA
-        rprintln!("Set SAU");
+        // // rprintln!("Set SAU");
         cp.SAU
             .set_region(
                 0,
@@ -154,7 +154,7 @@ fn main() -> ! {
         cp.SAU.enable();
 
         // Then set the ROM to secure only
-        rprintln!("Set ROM to secure");
+        // rprintln!("Set ROM to secure");
         for rom_mem in ahb_secure_ctrl.rom_mem_rule_iter() {
             rom_mem.write(|w| {
                 w.rule0().secure_nonpriv_user_allowed();
@@ -168,19 +168,19 @@ fn main() -> ! {
             });
         }
         // Set the secure RAM to secure only
-        rprintln!("Set RAM to secure");
+        // rprintln!("Set RAM to secure");
         set_ram_secure(SECURE_START_RAM..NONSECURE_START_RAM, ahb_secure_ctrl);
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
-        rprintln!("Set ROM range to secure");
+        // rprintln!("Set ROM range to secure");
         set_ram_secure(0x2014_0000..0x2017_0000, ahb_secure_ctrl);
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
-        rprintln!("Set secure RAM for code and data to secure");
+        // rprintln!("Set secure RAM for code and data to secure");
         set_ram_secure(0x2017_0000..0x2018_0000, ahb_secure_ctrl);
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
-        rprintln!("Setting all bus masters to non-secure");
+        // rprintln!("Setting all bus masters to non-secure");
         ahb_secure_ctrl.master_sec_level().modify(|_, w| {
             w.dma0_sec()
                 .enum_ns_np()
@@ -213,19 +213,19 @@ fn main() -> ! {
                 .master_sec_level_anti_pole_lock()
                 .writable()
         });
-        rprintln!(
-            "master_sec_level: {:#010X}, {:#010X}",
-            ahb_secure_ctrl.master_sec_level().read().bits(),
-            ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
-        );
+        // rprintln!(
+        //     "master_sec_level: {:#010X}, {:#010X}",
+        //     ahb_secure_ctrl.master_sec_level().read().bits(),
+        //     ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
+        // );
 
-        rprintln!(
-            "misc_ctrl_reg: {:#010X}, {:#010X}",
-            ahb_secure_ctrl.misc_ctrl_reg().read().bits(),
-            ahb_secure_ctrl.misc_ctrl_dp_reg().read().bits()
-        );
+        // rprintln!(
+        //     "misc_ctrl_reg: {:#010X}, {:#010X}",
+        //     ahb_secure_ctrl.misc_ctrl_reg().read().bits(),
+        //     ahb_secure_ctrl.misc_ctrl_dp_reg().read().bits()
+        // );
 
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
         // Make sure the new settings take effect immediately:
         // https://developer.arm.com/documentation/100235/0100/The-Cortex-M33-Peripherals/Security-Attribution-and--Memory-Protection/Updating-protected-memory-regions
@@ -239,15 +239,15 @@ fn main() -> ! {
 
         // Set all interrupts to non-secure
         for itns in &cp.NVIC.itns {
-            itns.write(u32::MAX);
-            // itns.write(0);
+            // itns.write(u32::MAX);
+            itns.write(0);
         }
 
         // Set the non-secure stack pointer
         // cortex_m::register::msp::write_ns(nonsecure_sp);
 
-        rprintln!("Jumping");
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rprintln!("Jumping");
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
         //[NSACR_CP0, NSACR_CP1, NSACR_CP10, NSACR_CP11, AHB_MISC_CTRL_REG_ENABLE_SECURE_CHECKING, AHB_MISC_CTRL_REG_WRITE_LOCK]
 
@@ -269,32 +269,32 @@ fn main() -> ! {
         ahb_secure_ctrl.ahb_periph3_slave_rule0().write(|w| w.bits(0xFFFCCFCC));
 
         let scn_scb = &*ScnScb::ptr().add(0x1000_0000);
-        scn_scb.cppwr().modify(|_, w| w.bits(0));
+        scn_scb.cppwr().write(|w| w.bits(0));
 
         // let scb = &*SCB::ptr();
         // scb.shcsr.modify(|w| w & 0x0FFF7FFFF); // Disable bit 19 / SECUREFAULTENA
         cp.SCB.shcsr.modify(|w| w | (1 << 19));
 
         let ptr = __cortex_m_rt_HardFault_trampoline as *mut u32;
-        rprintln!(
-            "TT {:#010X}, {:#010X}, {:#010X}, {:#010X}, {:#010X}",
-            ptr as u32,
-            cortex_m::asm::tt(ptr),
-            cortex_m::asm::ttt(ptr),
-            cortex_m::asm::tta(ptr),
-            cortex_m::asm::ttat(ptr),
-        );
+        // rprintln!(
+        //     "TT {:#010X}, {:#010X}, {:#010X}, {:#010X}, {:#010X}",
+        //     ptr as u32,
+        //     cortex_m::asm::tt(ptr),
+        //     cortex_m::asm::ttt(ptr),
+        //     cortex_m::asm::tta(ptr),
+        //     cortex_m::asm::ttat(ptr),
+        // );
         let ptr = 0x21000000 as *mut u32;
-        rprintln!(
-            "TT {:#010X}, {:#010X}, {:#010X}, {:#010X}, {:#010X}",
-            ptr as u32,
-            cortex_m::asm::tt(ptr),
-            cortex_m::asm::ttt(ptr),
-            cortex_m::asm::tta(ptr),
-            cortex_m::asm::ttat(ptr),
-        );
+        // rprintln!(
+        //     "TT {:#010X}, {:#010X}, {:#010X}, {:#010X}, {:#010X}",
+        //     ptr as u32,
+        //     cortex_m::asm::tt(ptr),
+        //     cortex_m::asm::ttt(ptr),
+        //     cortex_m::asm::tta(ptr),
+        //     cortex_m::asm::ttat(ptr),
+        // );
 
-        rprintln!("Locking master sec level");
+        // rprintln!("Locking master sec level");
         ahb_secure_ctrl
             .master_sec_level()
             .modify(|_, w| w.master_sec_level_lock().blocked());
@@ -302,20 +302,34 @@ fn main() -> ! {
             .master_sec_level_anti_pol()
             .modify(|_, w| w.master_sec_level_anti_pole_lock().blocked());
 
-        rprintln!(
-            "master_sec_level: {:#010X}, {:#010X}",
-            ahb_secure_ctrl.master_sec_level().read().bits(),
-            ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
-        );
+        // rprintln!(
+        //     "master_sec_level: {:#010X}, {:#010X}",
+        //     ahb_secure_ctrl.master_sec_level().read().bits(),
+        //     ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
+        // );
+
+        cp.SCB.aircr.write((cp.SCB.aircr.read() & 0x000009FF7) | 0x005FA0000);
+        // assert_eq!(cp.SCB.aircr.read(), 0x000009FF7);
+        cp.SCB
+            .aircr
+            .write((cp.SCB.aircr.read() | (1 << 13) | (1 << 14)) | 0x005FA0000);
+
+        cp.SCB.shcsr.modify(|mut w| {
+            w |= 1 << 19;
+            w |= 1 << 18;
+            w |= 1 << 17;
+            w |= 1 << 16;
+            w
+        });
+
+        let nsacr = 0xE000ED8C as *mut u32;
+        nsacr.write_volatile(0x00000C03);
 
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        // rprintln!("Test");
-        // __cortex_m_rt_HardFault();
-
-        rprintln!("Enabling AHB bus checks (1/2)");
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rprintln!("Enabling AHB bus checks (1/2)");
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
         ahb_secure_ctrl
             .misc_ctrl_reg()
@@ -323,18 +337,18 @@ fn main() -> ! {
 
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
-        rprintln!("Enabling AHB bus checks (2/2)");
-        rtt_target::UpChannel::conjure(0).unwrap().flush();
+        // rprintln!("Enabling AHB bus checks (2/2)");
+        // rtt_target::UpChannel::conjure(0).unwrap().flush();
 
         ahb_secure_ctrl
             .misc_ctrl_dp_reg()
             .modify(|_, w| w.enable_secure_checking().enable());
 
-        rprintln!(
-            "misc_ctrl_reg: {:#010X}, {:#010X}",
-            ahb_secure_ctrl.misc_ctrl_reg().read().bits(),
-            ahb_secure_ctrl.misc_ctrl_dp_reg().read().bits()
-        );
+        // rprintln!(
+        //     "misc_ctrl_reg: {:#010X}, {:#010X}",
+        //     ahb_secure_ctrl.misc_ctrl_reg().read().bits(),
+        //     ahb_secure_ctrl.misc_ctrl_dp_reg().read().bits()
+        // );
 
         // Create the right function pointer to the reset vector
         let nonsecure_reset =
@@ -344,6 +358,16 @@ fn main() -> ! {
         cp.SCB.shcsr.modify(|w| w | (1 << 19));
         // Prioritize and allow faults in the non-secure side
         // cp.SCB.aircr.modify(|w| w & !(1 << 14) & !(1 << 13));
+
+        let clkctl1 = &*Clkctl1::ptr();
+        clkctl1.pscctl1_set().write(|w| w.hsgpio0_clk_set().set_bit());
+
+        let rstctl1 = &*Rstctl1::ptr();
+        rstctl1.prstctl1_clr().write(|w| w.hsgpio0_rst_clr().set_bit());
+
+        let gpio = &*Gpio::ptr();
+        gpio.set(0).write(|w| w.setp().bits(1 << 26));
+        gpio.dirset(0).write(|w| w.dirsetp().bits(1 << 26));
 
         loop {
             cortex_m::asm::nop();
@@ -394,13 +418,13 @@ fn set_ram_secure(mut region: Range<u32>, ahb_secure_ctrl: &ahb_secure_ctrl::Reg
 
         let base_ptr = ahb_secure_ctrl.ram00_rule(0).as_ptr();
 
-        rprintln!(
-            "Ram region {:#010X}..{:#010X} to secure ({}, {})",
-            block_start,
-            block_start + block_size - 1,
-            register_index,
-            rule_index
-        );
+        // rprintln!(
+        //     "Ram region {:#010X}..{:#010X} to secure ({}, {})",
+        //     block_start,
+        //     block_start + block_size - 1,
+        //     register_index,
+        //     rule_index
+        // );
 
         unsafe {
             let target_register = base_ptr.add(register_index as usize);
@@ -417,11 +441,11 @@ fn set_ram_secure(mut region: Range<u32>, ahb_secure_ctrl: &ahb_secure_ctrl::Reg
 #[cortex_m_rt::exception]
 unsafe fn SecureFault() -> ! {
     let sau = &*cortex_m::peripheral::SAU::PTR;
-    rprintln!(
-        "SecureFault! - SFSR: {:#010X}, SFAR: {:#010X}",
-        sau.sfsr.read().0,
-        sau.sfar.read().0
-    );
+    // rprintln!(
+    //     "SecureFault! - SFSR: {:#010X}, SFAR: {:#010X}",
+    //     sau.sfsr.read().0,
+    //     sau.sfar.read().0
+    // );
     loop {
         cortex_m::asm::nop();
     }
@@ -430,7 +454,7 @@ unsafe fn SecureFault() -> ! {
 #[cortex_m_rt::exception(trampoline = false)]
 unsafe fn HardFault() -> ! {
     let scb = &*cortex_m::peripheral::SCB::PTR;
-    rprintln!("HardFault! - HFSR: {:#010X}", scb.hfsr.read());
+    // rprintln!("HardFault! - HFSR: {:#010X}", scb.hfsr.read());
     loop {
         cortex_m::asm::nop();
     }
@@ -438,7 +462,7 @@ unsafe fn HardFault() -> ! {
 
 #[interrupt]
 unsafe fn SECUREVIOLATION() {
-    rprintln!("SecureViolation!");
+    // rprintln!("SecureViolation!");
     loop {
         cortex_m::asm::nop();
     }
@@ -446,7 +470,7 @@ unsafe fn SECUREVIOLATION() {
 
 #[panic_handler]
 fn panic(i: &PanicInfo) -> ! {
-    rprintln!("{}", i);
+    // rprintln!("{}", i);
     loop {
         cortex_m::asm::nop();
     }

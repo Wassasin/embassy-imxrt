@@ -600,7 +600,6 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "mimxrt685s-pac",
- "rtt-target 0.6.1",
 ]
 
 [[package]]

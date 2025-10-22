@@ -14,4 +14,4 @@ mimxrt685s-pac = { version = "0.5.0", features = [
     "rt",
     "critical-section",
 ] }
-rtt-target = "0.6.1"
+# rtt-target = "0.6.1"

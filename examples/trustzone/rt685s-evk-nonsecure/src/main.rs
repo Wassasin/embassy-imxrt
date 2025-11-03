@@ -49,6 +49,7 @@ async fn main(_spawner: Spawner) {
     rprintln!("Toggling LED");
     led.toggle();
 
+    rprintln!("About to call secure function...");
     rprintln!("Calling secure function: {}", do_stuff_secure(5));
 
     rprintln!("Trying to get DMA access to secure memory");

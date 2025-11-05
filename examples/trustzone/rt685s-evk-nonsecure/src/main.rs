@@ -3,10 +3,10 @@
 
 use core::mem::MaybeUninit;
 
-use cortex_m::peripheral::SCB;
 use embassy_executor::Spawner;
 use embassy_imxrt::dma::transfer::TransferOptions;
 use embassy_imxrt::gpio;
+use embassy_imxrt::pac::{interrupt, Interrupt};
 use embassy_time::Timer;
 use panic_probe as _;
 use rtt_target::{rprintln, UpChannel};
@@ -30,6 +30,12 @@ unsafe extern "C" {
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_imxrt::init(Default::default());
+    let mut cp = cortex_m::Peripherals::take().unwrap();
+
+    // Make DMA0 lower priority than SECUREVIOLATION.
+    unsafe {
+        cp.NVIC.set_priority(Interrupt::DMA0, 32);
+    }
 
     rtt_target::set_print_channel(unsafe { UpChannel::conjure(0) }.unwrap());
     rtt_target::rprintln!("Hello world");
@@ -97,45 +103,9 @@ async fn main(_spawner: Spawner) {
     cortex_m::asm::bkpt();
 }
 
-#[cortex_m_rt::exception]
-unsafe fn SecureFault() -> ! {
-    let sau = &*cortex_m::peripheral::SAU::PTR;
-    rprintln!(
-        "SecureFault! - SFSR: {:#010X}, SFAR: {:#010X}",
-        sau.sfsr.read().0,
-        sau.sfar.read().0
-    );
-    loop {
-        cortex_m::asm::nop();
-    }
-}
-
-#[cortex_m_rt::exception(trampoline = false)]
-unsafe fn HardFault() -> ! {
-    let scb = &*SCB::PTR;
-    rprintln!("HardFault! (S) - SHCSR: {:#010X}", scb.shcsr.read());
-
-    loop {
-        cortex_m::asm::nop();
-    }
-}
-
-#[cortex_m_rt::exception]
-unsafe fn UsageFault() -> ! {
-    rprintln!("UsageFault!");
-    loop {
-        cortex_m::asm::nop();
-    }
-}
-
-#[cortex_m_rt::exception]
-unsafe fn BusFault() -> ! {
-    let scb = &*SCB::PTR;
-    rprintln!(
-        "BusFault! - CFSR: {:#010X}, BFAR: {:#010X}",
-        scb.cfsr.read(),
-        scb.bfar.read()
-    );
+#[interrupt]
+unsafe fn SECUREVIOLATION() {
+    rprintln!("SECUREVIOLATION!");
     loop {
         cortex_m::asm::nop();
     }

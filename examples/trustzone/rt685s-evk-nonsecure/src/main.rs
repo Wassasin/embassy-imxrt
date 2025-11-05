@@ -3,6 +3,7 @@
 
 use core::mem::MaybeUninit;
 
+use cortex_m::peripheral::SCB;
 use embassy_executor::Spawner;
 use embassy_imxrt::dma::transfer::TransferOptions;
 use embassy_imxrt::gpio;
@@ -94,4 +95,48 @@ async fn main(_spawner: Spawner) {
     rprintln!("Oh no! The CPU worked!: {}", do_stuff_secure(5));
 
     cortex_m::asm::bkpt();
+}
+
+#[cortex_m_rt::exception]
+unsafe fn SecureFault() -> ! {
+    let sau = &*cortex_m::peripheral::SAU::PTR;
+    rprintln!(
+        "SecureFault! - SFSR: {:#010X}, SFAR: {:#010X}",
+        sau.sfsr.read().0,
+        sau.sfar.read().0
+    );
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[cortex_m_rt::exception(trampoline = false)]
+unsafe fn HardFault() -> ! {
+    let scb = &*SCB::PTR;
+    rprintln!("HardFault! (S) - SHCSR: {:#010X}", scb.shcsr.read());
+
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[cortex_m_rt::exception]
+unsafe fn UsageFault() -> ! {
+    rprintln!("UsageFault!");
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[cortex_m_rt::exception]
+unsafe fn BusFault() -> ! {
+    let scb = &*SCB::PTR;
+    rprintln!(
+        "BusFault! - CFSR: {:#010X}, BFAR: {:#010X}",
+        scb.cfsr.read(),
+        scb.bfar.read()
+    );
+    loop {
+        cortex_m::asm::nop();
+    }
 }

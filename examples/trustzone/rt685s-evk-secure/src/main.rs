@@ -9,9 +9,10 @@ use core::sync::atomic::{fence, AtomicU32, Ordering};
 use core::u32;
 
 use cortex_m::peripheral::sau::SauRegion;
+use cortex_m::peripheral::SCB;
 use mimxrt600_fcb::FlexSPIFlashConfigurationBlock;
 use mimxrt685s_pac::ahb_secure_ctrl::ram00_rule::Rule0;
-use mimxrt685s_pac::{ahb_secure_ctrl, AhbSecureCtrl, Sau, ScnScb};
+use mimxrt685s_pac::{ahb_secure_ctrl, interrupt, AhbSecureCtrl, Interrupt, Sau, ScnScb};
 use rtt_target::rprintln;
 use rtt_target::ChannelMode::NoBlockSkip;
 
@@ -43,6 +44,38 @@ extern "Rust" {
 }
 
 const VTOR_NS: *mut u32 = 0xE002ED08 as *mut u32;
+
+fn test_security(addr: *mut u32) {
+    fn opt_if<T>(val: bool, some: T) -> Option<T> {
+        if val {
+            Some(some)
+        } else {
+            None
+        }
+    }
+
+    let res = cortex_m::asm::ttat(addr);
+    let mrvalid = res >> 16 & 0b1 == 0b1;
+    let srvalid = res >> 17 & 0b1 == 0b1;
+    let irvalid = res >> 23 & 0b1 == 0b1;
+    let mregion = opt_if(mrvalid, res & 0xf);
+    let sregion = opt_if(srvalid, res >> 8 & 0xf);
+    let iregion = opt_if(irvalid, res >> 24 & 0xf);
+    let r = res >> 18 & 0b1 == 0b1;
+    let rw = res >> 19 & 0b1 == 0b1;
+    let s = res >> 22 & 0b1 == 0b1;
+    rprintln!(
+        "ttat({:#010X}): {:#010X} (mregion: {:?}, sregion {:?}, iregion {:?}, r {}, rw {}, s {})",
+        addr as u32,
+        res,
+        mregion,
+        sregion,
+        iregion,
+        r,
+        rw,
+        s
+    );
+}
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
@@ -175,18 +208,19 @@ fn main() -> ! {
         ahb_secure_ctrl.ahb_periph2_slave_rule0().write(|w| w.bits(0));
         ahb_secure_ctrl.pif_hifi4_x_mem_rule0().write(|w| w.bits(0));
 
-        ahb_secure_ctrl.apb_grp0_mem_rule0().write(|w| w.bits(0xFCFFFFFF));
-        ahb_secure_ctrl.apb_grp0_mem_rule1().write(|w| w.bits(0xCCFFFFFF));
-        ahb_secure_ctrl.apb_grp1_mem_rule0().write(|w| w.bits(0xFCCFFFFF));
-        ahb_secure_ctrl.apb_grp1_mem_rule1().write(|w| w.bits(0xCCCCCCCC));
-        ahb_secure_ctrl.apb_grp1_mem_rule2().write(|w| w.bits(0xFCFFFFFC));
-        ahb_secure_ctrl.ahb_periph0_slave_rule0().write(|w| w.bits(0xFCCCFCCC));
-        ahb_secure_ctrl.aips_bridge0_mem_rule0().write(|w| w.bits(0xFFFCCCCC));
-        ahb_secure_ctrl.ahb_periph1_slave_rule0().write(|w| w.bits(0xCCCCCCCC));
-        ahb_secure_ctrl.aips_bridge1_mem_rule0().write(|w| w.bits(0xCCFCFFFF));
-        ahb_secure_ctrl.aips_bridge1_mem_rule1().write(|w| w.bits(0xFFFFCCCC));
-        ahb_secure_ctrl.ahb_periph2_slave_rule0().write(|w| w.bits(0xFFFFCCCF));
-        ahb_secure_ctrl.ahb_periph3_slave_rule0().write(|w| w.bits(0xFFFCCFCC));
+        // Set all peripherals to NonSecure
+        ahb_secure_ctrl.apb_grp0_mem_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.apb_grp0_mem_rule1().write(|w| w.bits(0));
+        ahb_secure_ctrl.apb_grp1_mem_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.apb_grp1_mem_rule1().write(|w| w.bits(0));
+        ahb_secure_ctrl.apb_grp1_mem_rule2().write(|w| w.bits(0));
+        ahb_secure_ctrl.ahb_periph0_slave_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.aips_bridge0_mem_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.ahb_periph1_slave_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.aips_bridge1_mem_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.aips_bridge1_mem_rule1().write(|w| w.bits(0));
+        ahb_secure_ctrl.ahb_periph2_slave_rule0().write(|w| w.bits(0));
+        ahb_secure_ctrl.ahb_periph3_slave_rule0().write(|w| w.bits(0));
 
         rprintln!("Setting all bus masters to non-secure");
         ahb_secure_ctrl.master_sec_level().write(|w| w.bits(0x80000000));
@@ -231,17 +265,17 @@ fn main() -> ! {
             ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
         );
 
-        // cp.SCB.aircr.write((cp.SCB.aircr.read() & 0x000009FF7) | 0x005FA0000);
-        // cp.SCB.scr.modify(|w| w & 0x0FFFFFFF7);
-        // cp.SCB.shcsr.modify(|w| w & 0x0FFF7FFFF);
+        cp.SCB.aircr.write((cp.SCB.aircr.read() & 0x000009FF7) | 0x005FA0000);
+        cp.SCB.scr.modify(|w| w & 0x0FFFFFFF7);
+        cp.SCB.shcsr.modify(|w| w & 0x0FFF7FFFF);
 
         // // SCB->NSACR                        = 0x00000C03U;
-        // let nsacr = 0xE000ED8C as *mut u32;
-        // nsacr.write_volatile(0x00000C03);
+        let nsacr = 0xE000ED8C as *mut u32;
+        nsacr.write_volatile(0x00000C03);
 
         // // SCnSCB->CPPWR                     = 0;
-        // let scn_scb = &*ScnScb::ptr().add(0x1000_0000);
-        // scn_scb.cppwr().write(|w| w.bits(0));
+        let scn_scb = &*ScnScb::ptr().add(0x1000_0000);
+        scn_scb.cppwr().write(|w| w.bits(0));
 
         // ahb_secure_ctrl
         //     .sec_mask_lock()
@@ -266,14 +300,14 @@ fn main() -> ! {
                 .disable()
                 .enable_s_priv_check()
                 .disable()
-                // .idau_all_ns()
-                // .enable()
-                // .disable_violation_abort()
-                // .enable()
-                .disable_simple_master_strict_mode()
-                .tier_mode()
-                .disable_smart_master_strict_mode()
-                .tier_mode()
+            // .idau_all_ns()
+            // .enable()
+            // .disable_violation_abort()
+            // .disable()
+            // .disable_simple_master_strict_mode()
+            // .tier_mode()
+            // .disable_smart_master_strict_mode()
+            // .tier_mode()
         });
         ahb_secure_ctrl.misc_ctrl_dp_reg().modify(|_, w| {
             w.enable_ns_priv_check()
@@ -282,14 +316,14 @@ fn main() -> ! {
                 .disable()
                 .enable_s_priv_check()
                 .disable()
-                // .idau_all_ns()
-                // .enable()
-                // .disable_violation_abort()
-                // .enable()
-                .disable_simple_master_strict_mode()
-                .tier_mode()
-                .disable_smart_master_strict_mode()
-                .tier_mode()
+            // .idau_all_ns()
+            // .enable()
+            // .disable_violation_abort()
+            // .disable()
+            // .disable_simple_master_strict_mode()
+            // .tier_mode()
+            // .disable_smart_master_strict_mode()
+            // .tier_mode()
         });
 
         // Enable it all.
@@ -339,9 +373,14 @@ fn main() -> ! {
         cp.SAU.enable();
 
         // Enable the secure fault
-        cp.SCB.shcsr.modify(|w| w | (1 << 19));
+        cp.SCB.shcsr.modify(|w| w | (1 << 19 | 1 << 18 | 1 << 17));
+
+        cortex_m::peripheral::NVIC::unmask(Interrupt::SECUREVIOLATION);
 
         rprintln!("Jumping");
+
+        test_security(&raw const __veneer_base as u32 as *mut u32);
+        test_security(nonsecure_reset as *mut u32);
 
         // Create the right function pointer to the reset vector
         let nonsecure_reset =
@@ -349,6 +388,9 @@ fn main() -> ! {
 
         // Prioritize and allow faults in the non-secure side
         // cp.SCB.aircr.modify(|w| w & !(1 << 14) & !(1 << 13));
+
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
 
         // Jump
         nonsecure_reset();
@@ -434,7 +476,38 @@ unsafe fn SecureFault() -> ! {
 
 #[cortex_m_rt::exception(trampoline = false)]
 unsafe fn HardFault() -> ! {
-    rprintln!("HardFault!");
+    let scb = &*SCB::PTR;
+    rprintln!("HardFault! (S) - SHCSR: {:#010X}", scb.shcsr.read());
+
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[cortex_m_rt::exception]
+unsafe fn UsageFault() -> ! {
+    rprintln!("UsageFault!");
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[cortex_m_rt::exception]
+unsafe fn BusFault() -> ! {
+    let scb = &*SCB::PTR;
+    rprintln!(
+        "BusFault! - CFSR: {:#010X}, BFAR: {:#010X}",
+        scb.cfsr.read(),
+        scb.bfar.read()
+    );
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[interrupt]
+unsafe fn SECUREVIOLATION() {
+    rprintln!("SECUREVIOLATION!");
     loop {
         cortex_m::asm::nop();
     }

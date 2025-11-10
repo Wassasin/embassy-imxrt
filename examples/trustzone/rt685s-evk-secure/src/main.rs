@@ -190,14 +190,14 @@ fn main() -> ! {
         rprintln!("Set ROM to secure");
         for rom_mem in ahb_secure_ctrl.rom_mem_rule_iter() {
             reg_write_checked!(rom_mem, |w| {
-                w.rule0().secure_nonpriv_user_allowed();
-                w.rule1().secure_nonpriv_user_allowed();
-                w.rule2().secure_nonpriv_user_allowed();
-                w.rule3().secure_nonpriv_user_allowed();
-                w.rule4().secure_nonpriv_user_allowed();
-                w.rule5().secure_nonpriv_user_allowed();
-                w.rule6().secure_nonpriv_user_allowed();
-                w.rule7().secure_nonpriv_user_allowed()
+                w.rule0().secure_priv_user_allowed();
+                w.rule1().secure_priv_user_allowed();
+                w.rule2().secure_priv_user_allowed();
+                w.rule3().secure_priv_user_allowed();
+                w.rule4().secure_priv_user_allowed();
+                w.rule5().secure_priv_user_allowed();
+                w.rule6().secure_priv_user_allowed();
+                w.rule7().secure_priv_user_allowed()
             });
         }
 
@@ -300,9 +300,10 @@ fn main() -> ! {
         nsacr.write_volatile(0x00000C03);
 
         // Unset all Coprocessor Power Control power down bits, enabling the FPU.
-        let scn_scb = &*ScnScb::ptr().byte_add(0x1000_0000);
+        let scn_scb = &*ScnScb::ptr();
         scn_scb.cppwr().write(|w| w.bits(0));
 
+        rprintln!("Masking DSP and GPIO");
         // Lock all security configrations for the DPS and the GPIO masks.
         reg_write_checked!(ahb_secure_ctrl.sec_mask_lock(), |w| {
             w.sec_dsp_int_lock()
@@ -343,16 +344,16 @@ fn main() -> ! {
                 .disable()
         });
 
-        rprintln!("Configure security ctrl aliases to recommended");
+        rprintln!("Configure security ctrl aliases to secure");
         reg_write_checked!(ahb_secure_ctrl.security_ctrl_mem_rule0(), |w| {
             w.rule0()
                 .bits(0b11)
                 .rule1()
-                .bits(0b10)
+                .bits(0b11)
                 .rule2()
-                .bits(0b01)
+                .bits(0b11)
                 .rule3()
-                .bits(0b00)
+                .bits(0b11)
         });
 
         rprintln!("Enabling SAU");
@@ -465,19 +466,6 @@ fn set_ram_secure(mut region: Range<u32>, ahb_secure_ctrl: &ahb_secure_ctrl::Reg
     }
 }
 
-#[cortex_m_rt::exception]
-unsafe fn SecureFault() -> ! {
-    let sau = &*cortex_m::peripheral::SAU::PTR;
-    rprintln!(
-        "SecureFault! - SFSR: {:#010X}, SFAR: {:#010X}",
-        sau.sfsr.read().0,
-        sau.sfar.read().0
-    );
-    loop {
-        cortex_m::asm::nop();
-    }
-}
-
 #[cortex_m_rt::exception(trampoline = false)]
 unsafe fn HardFault() -> ! {
     let scb = &*SCB::PTR;
@@ -489,8 +477,21 @@ unsafe fn HardFault() -> ! {
 }
 
 #[cortex_m_rt::exception]
+unsafe fn SecureFault() -> ! {
+    let sau = &*cortex_m::peripheral::SAU::PTR;
+    rprintln!(
+        "SecureFault! (S) - SFSR: {:#010X}, SFAR: {:#010X}",
+        sau.sfsr.read().0,
+        sau.sfar.read().0
+    );
+    loop {
+        cortex_m::asm::nop();
+    }
+}
+
+#[cortex_m_rt::exception]
 unsafe fn UsageFault() -> ! {
-    rprintln!("UsageFault!");
+    rprintln!("UsageFault! (S)");
     loop {
         cortex_m::asm::nop();
     }
@@ -500,7 +501,7 @@ unsafe fn UsageFault() -> ! {
 unsafe fn BusFault() -> ! {
     let scb = &*SCB::PTR;
     rprintln!(
-        "BusFault! - CFSR: {:#010X}, BFAR: {:#010X}",
+        "BusFault! (S) - CFSR: {:#010X}, BFAR: {:#010X}",
         scb.cfsr.read(),
         scb.bfar.read()
     );
@@ -511,7 +512,7 @@ unsafe fn BusFault() -> ! {
 
 #[interrupt]
 unsafe fn SECUREVIOLATION() {
-    rprintln!("SECUREVIOLATION!");
+    rprintln!("SECUREVIOLATION! (S)");
     loop {
         cortex_m::asm::nop();
     }

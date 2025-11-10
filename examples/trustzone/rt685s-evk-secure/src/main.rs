@@ -12,7 +12,8 @@ use cortex_m::peripheral::sau::{SauRegion, SauRegionAttribute};
 use cortex_m::peripheral::SCB;
 use mimxrt600_fcb::FlexSPIFlashConfigurationBlock;
 use mimxrt685s_pac::ahb_secure_ctrl::ram00_rule::Rule0;
-use mimxrt685s_pac::{ahb_secure_ctrl, interrupt, AhbSecureCtrl, Interrupt, Sau, ScnScb};
+use mimxrt685s_pac::ahb_secure_ctrl::{self};
+use mimxrt685s_pac::{interrupt, AhbSecureCtrl, Sau, ScnScb};
 use rtt_target::rprintln;
 use rtt_target::ChannelMode::NoBlockSkip;
 
@@ -77,6 +78,24 @@ fn test_security(addr: *mut u32) {
         rw,
         s
     );
+    unsafe { rtt_target::UpChannel::conjure(0) }.unwrap().flush();
+}
+
+// A common failure mode when configuring these security registers is that the changes are ignored,
+// without ever throwing a fault or an exception.
+// Hence we need to check if the changes persisted.
+macro_rules! reg_write_checked {
+    ($reg:expr, $f:expr) => {{
+        let v = $reg.write($f);
+        assert_eq!(v, $reg.read().bits());
+    }};
+}
+
+macro_rules! reg_modify_checked {
+    ($reg:expr, $f:expr) => {{
+        let v = $reg.modify($f);
+        assert_eq!(v, $reg.read().bits());
+    }};
 }
 
 #[cortex_m_rt::entry]
@@ -114,6 +133,8 @@ fn main() -> ! {
             &raw const __veneer_base as u32,
             &raw const __veneer_limit as u32
         );
+
+        let ahb_secure_ctrl = &*(AhbSecureCtrl::ptr().byte_add(0x1000_0000));
 
         // Set all regions not used by this program to non-secure.
         // This only concerns the CM33 access, not any of the other bus masters like DMA
@@ -161,12 +182,14 @@ fn main() -> ! {
                 )
                 .unwrap();
         }
-        // Note delay SAU configuration until we are done.
+
+        // Enable SAU, marking appropriate regions as NonSecure and NonSecureCallable.
+        rprintln!("Enabling SAU");
+        cp.SAU.enable();
 
         rprintln!("Set ROM to secure");
-        let ahb_secure_ctrl = &*AhbSecureCtrl::ptr().add(0x1000_0000);
         for rom_mem in ahb_secure_ctrl.rom_mem_rule_iter() {
-            rom_mem.write(|w| {
+            reg_write_checked!(rom_mem, |w| {
                 w.rule0().secure_nonpriv_user_allowed();
                 w.rule1().secure_nonpriv_user_allowed();
                 w.rule2().secure_nonpriv_user_allowed();
@@ -185,38 +208,42 @@ fn main() -> ! {
             "Set FlexSPI memory to secure (up to {:X}) and the rest to non-secure",
             NONSECURE_START_FLASH as u32
         );
-        ahb_secure_ctrl.flexspi0_region0_rule(0).write(|w| w.bits(0x00000003));
-        ahb_secure_ctrl.flexspi0_region0_rule(1).write(|w| w.bits(0x00000000));
-        ahb_secure_ctrl.flexspi0_region0_rule(2).write(|w| w.bits(0x00000000));
-        ahb_secure_ctrl.flexspi0_region0_rule(3).write(|w| w.bits(0x00000000));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region0_rule(0), |w| w.bits(0x00000003));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region0_rule(1), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region0_rule(2), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region0_rule(3), |w| w.bits(0));
 
-        ahb_secure_ctrl.flexspi0_region1_rule0().write(|w| w.bits(0x00000000));
-        ahb_secure_ctrl.flexspi0_region2_rule0().write(|w| w.bits(0x00000000));
-        ahb_secure_ctrl.flexspi0_region3_rule0().write(|w| w.bits(0x00000000));
-        ahb_secure_ctrl.flexspi0_region4_rule0().write(|w| w.bits(0x00000000));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region1_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region2_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region3_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.flexspi0_region4_rule0(), |w| w.bits(0));
 
-        rprintln!("Set all peripherals to non-secure");
-        rprintln!("!!!TODO!!! which is the OTP peripheral? Disable that too.");
-        ahb_secure_ctrl.pif_hifi4_x_mem_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.apb_grp0_mem_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.apb_grp0_mem_rule1().write(|w| w.bits(0));
-        ahb_secure_ctrl.apb_grp1_mem_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.apb_grp1_mem_rule1().write(|w| w.bits(0));
-        ahb_secure_ctrl.apb_grp1_mem_rule2().write(|w| w.bits(0));
-        ahb_secure_ctrl.ahb_periph0_slave_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.aips_bridge0_mem_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.ahb_periph1_slave_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.aips_bridge1_mem_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.aips_bridge1_mem_rule1().write(|w| w.bits(0));
-        ahb_secure_ctrl.ahb_periph2_slave_rule0().write(|w| w.bits(0));
-        ahb_secure_ctrl.ahb_periph3_slave_rule0().write(|w| w.bits(0));
+        rprintln!("Set all peripherals to non-secure (except for OTP)");
+        reg_write_checked!(ahb_secure_ctrl.pif_hifi4_x_mem_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.apb_grp0_mem_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.apb_grp0_mem_rule1(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.apb_grp1_mem_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.apb_grp1_mem_rule1(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.apb_grp1_mem_rule2(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.ahb_periph0_slave_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.aips_bridge0_mem_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.ahb_periph1_slave_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.aips_bridge1_mem_rule0(), |w| {
+            w.otp_rule0()
+                .bits(0b11)
+                .otp_rule1()
+                .bits(0b11)
+                .otp_rule2()
+                .bits(0b11)
+                .otp_rule3()
+                .bits(0b11)
+        });
+        reg_write_checked!(ahb_secure_ctrl.aips_bridge1_mem_rule1(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.ahb_periph2_slave_rule0(), |w| w.bits(0));
+        reg_write_checked!(ahb_secure_ctrl.ahb_periph3_slave_rule0(), |w| w.bits(0));
 
         rprintln!("Setting all bus masters to non-secure");
-        ahb_secure_ctrl.master_sec_level().write(|w| w.bits(0x80000000));
-        ahb_secure_ctrl
-            .master_sec_level_anti_pol()
-            .write(|w| w.bits(0xBFFFFFFF));
-        ahb_secure_ctrl.master_sec_level().write(|w| {
+        reg_write_checked!(ahb_secure_ctrl.master_sec_level(), |w| {
             w.dma0_sec()
                 .enum_ns_np()
                 .dma1_sec()
@@ -232,7 +259,7 @@ fn main() -> ! {
                 .master_sec_level_lock()
                 .blocked()
         });
-        ahb_secure_ctrl.master_sec_level_anti_pol().write(|w| {
+        reg_write_checked!(ahb_secure_ctrl.master_sec_level_anti_pol(), |w| {
             w.dma0_sec()
                 .enum_ns_np()
                 .dma1_sec()
@@ -248,39 +275,58 @@ fn main() -> ! {
                 .master_sec_level_anti_pole_lock()
                 .blocked()
         });
-        rprintln!(
-            "master_sec_level: {:#010X}, {:#010X}",
-            ahb_secure_ctrl.master_sec_level().read().bits(),
-            ahb_secure_ctrl.master_sec_level_anti_pol().read().bits()
-        );
 
-        cp.SCB.aircr.write((cp.SCB.aircr.read() & 0x000009FF7) | 0x005FA0000);
+        rprintln!("Configure CM33");
+        // [3]  Disable SYSRESETREQ from non-secure.
+        // [13] Use secure BusFault, HardFault and NMI.
+        // [14] Priority ranges of secure and non-secure exceptions are identical.
+        cp.SCB
+            .aircr
+            .write((cp.SCB.aircr.read() & (0xffff ^ (1 << 3 | 1 << 13 | 1 << 14))) | 0x005FA0000);
+
+        // [3] Set secure mode to normal sleep (contrary to deep sleep)
         cp.SCB.scr.modify(|w| w & 0x0FFFFFFF7);
-        cp.SCB.shcsr.modify(|w| w & 0x0FFF7FFFF);
 
-        // // SCB->NSACR                        = 0x00000C03U;
+        // [17] Enable Bus Fault
+        // [18] Enable Usage Fault
+        // [19] Enable Secure fault
+        cp.SCB.shcsr.modify(|w| w | (1 << 19 | 1 << 18 | 1 << 17));
+
+        // [0]  Enable non-secure access to CP0
+        // [1]  Enable non-secure access to CP1
+        // [10] Enable non-secure access to CP10 - float-point extension
+        // [11] Enable non-secure access to CP11 - float-point extension (must be set iff CP10 is set)
         let nsacr = 0xE000ED8C as *mut u32;
         nsacr.write_volatile(0x00000C03);
 
-        // // SCnSCB->CPPWR                     = 0;
-        let scn_scb = &*ScnScb::ptr().add(0x1000_0000);
+        // Unset all Coprocessor Power Control power down bits, enabling the FPU.
+        let scn_scb = &*ScnScb::ptr().byte_add(0x1000_0000);
         scn_scb.cppwr().write(|w| w.bits(0));
 
-        // ahb_secure_ctrl
-        //     .sec_mask_lock()
-        //     .write(|w| w.bits((ahb_secure_ctrl.sec_mask_lock().read().bits() & 0x0FFFCFFC0) | 0x00002002A));
-
-        // ahb_secure_ctrl
-        //     .master_sec_level()
-        //     .write(|w| w.bits((ahb_secure_ctrl.master_sec_level().read().bits() & 0x03FFFFFFF) | 0x080000000));
-        // ahb_secure_ctrl
-        //     .master_sec_level_anti_pol()
-        //     .write(|w| w.bits((ahb_secure_ctrl.master_sec_level_anti_pol().read().bits() & 0x03FFFFFFF) | 0x080000000));
-
-        // ahb_secure_ctrl.cm33_lock_reg().write(|w| w.bits(0x800002AA));
+        // Lock all security configrations for the DPS and the GPIO masks.
+        reg_write_checked!(ahb_secure_ctrl.sec_mask_lock(), |w| {
+            w.sec_dsp_int_lock()
+                .blocked()
+                .sec_gpio_mask0_lock()
+                .blocked()
+                .sec_gpio_mask1_lock()
+                .blocked()
+                .sec_gpio_mask2_lock()
+                .blocked()
+                .sec_gpio_mask3_lock()
+                .blocked()
+                .sec_gpio_mask4_lock()
+                .blocked()
+                .sec_gpio_mask5_lock()
+                .blocked()
+                .sec_gpio_mask6_lock()
+                .blocked()
+                .sec_gpio_mask7_lock()
+                .blocked()
+        });
 
         rprintln!("Enabling AHB bus checks");
-        ahb_secure_ctrl.misc_ctrl_reg().modify(|_, w| {
+        reg_modify_checked!(ahb_secure_ctrl.misc_ctrl_reg(), |_, w| {
             w.enable_ns_priv_check()
                 .disable()
                 .enable_secure_checking()
@@ -288,7 +334,7 @@ fn main() -> ! {
                 .enable_s_priv_check()
                 .disable()
         });
-        ahb_secure_ctrl.misc_ctrl_dp_reg().modify(|_, w| {
+        reg_modify_checked!(ahb_secure_ctrl.misc_ctrl_dp_reg(), |_, w| {
             w.enable_ns_priv_check()
                 .disable()
                 .enable_secure_checking()
@@ -297,61 +343,67 @@ fn main() -> ! {
                 .disable()
         });
 
-        rprintln!(
-            "misc_ctrl_reg: {:#010X}, {:#010X}",
-            ahb_secure_ctrl.misc_ctrl_reg().read().bits(),
-            ahb_secure_ctrl.misc_ctrl_dp_reg().read().bits()
-        );
+        rprintln!("Configure security ctrl aliases to recommended");
+        reg_write_checked!(ahb_secure_ctrl.security_ctrl_mem_rule0(), |w| {
+            w.rule0()
+                .bits(0b11)
+                .rule1()
+                .bits(0b10)
+                .rule2()
+                .bits(0b01)
+                .rule3()
+                .bits(0b00)
+        });
+
+        rprintln!("Enabling SAU");
+        cp.SAU.enable();
+
+        rprintln!("Lock secure MPU and VTOR (not SAU)");
+        // Cannot lock SAU as we still need to enable it.
+        // 0x5 region seems to be translated to 0x4 when SAU is already enabled.
+        reg_modify_checked!(ahb_secure_ctrl.cm33_lock_reg(), |_, w| {
+            w.lock_s_mpu()
+                .blocked()
+                .lock_s_vtor()
+                .blocked()
+                .cm33_lock_reg_lock()
+                .blocked()
+        });
+
+        rprintln!("Lock all security CTRL");
+        reg_modify_checked!(ahb_secure_ctrl.misc_ctrl_reg(), |_, w| w.write_lock().restricted());
+        // Cannot set DP register as we have just locked the entire block.
+        // reg_modify_checked!(ahb_secure_ctrl.misc_ctrl_dp_reg(), |_, w| w.write_lock().restricted());
+
+        // Set the nonsecure VTOR.
+        VTOR_NS.write_volatile(NONSECURE_START_FLASH as u32);
+
+        // Set all interrupts to non-secure.
+        for itns in &cp.NVIC.itns {
+            itns.write(u32::MAX);
+        }
+
+        // Set the non-secure stack pointer.
+        cortex_m::register::msp::write_ns(nonsecure_sp);
 
         // Make sure the new settings take effect immediately:
         // https://developer.arm.com/documentation/100235/0100/The-Cortex-M33-Peripherals/Security-Attribution-and--Memory-Protection/Updating-protected-memory-regions
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
 
-        // Set the nonsecure VTOR
-        VTOR_NS.write_volatile(NONSECURE_START_FLASH as u32);
-
-        // Set all interrupts to non-secure
-        for itns in &cp.NVIC.itns {
-            itns.write(u32::MAX);
-        }
-
-        // Set the non-secure stack pointer
-        cortex_m::register::msp::write_ns(nonsecure_sp);
-
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
-
-        cp.SAU.enable();
-
-        // Enable the secure fault
-        cp.SCB.shcsr.modify(|w| w | (1 << 19 | 1 << 18 | 1 << 17));
-
-        cortex_m::peripheral::NVIC::unmask(Interrupt::SECUREVIOLATION);
-
         test_security(&raw const __veneer_base as u32 as *mut u32);
         test_security(nonsecure_reset as *mut u32);
 
         rprintln!("Jumping");
 
-        // Create the right function pointer to the reset vector
+        // Create the right function pointer to the reset vector.
         let nonsecure_reset =
             core::mem::transmute::<*const u32, extern "cmse-nonsecure-call" fn()>(nonsecure_reset as *const u32);
 
-        // Prioritize and allow faults in the non-secure side
-        // cp.SCB.aircr.modify(|w| w & !(1 << 14) & !(1 << 13));
-
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
-
-        // Jump
+        // Jump.
         nonsecure_reset();
 
         cortex_m::asm::udf();
-
-        // loop {
-        //     cortex_m::asm::nop();
-        // }
     }
 }
 

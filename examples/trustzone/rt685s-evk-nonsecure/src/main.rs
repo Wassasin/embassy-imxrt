@@ -29,6 +29,8 @@ unsafe extern "C" {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
+    unsafe { cortex_m::peripheral::NVIC::unmask(Interrupt::SECUREVIOLATION) };
+
     let p = embassy_imxrt::init(Default::default());
     let mut cp = cortex_m::Peripherals::take().unwrap();
 
@@ -105,7 +107,7 @@ async fn main(_spawner: Spawner) {
 
 #[interrupt]
 unsafe fn SECUREVIOLATION() {
-    rprintln!("SECUREVIOLATION!");
+    rprintln!("SECUREVIOLATION! (ns)");
     loop {
         cortex_m::asm::nop();
     }
